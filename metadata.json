@@ -1,0 +1,6 @@
+{
+  "name": "FramePulse HUD",
+  "description": "Windows Game Framerate & Frame Generation Overlay Configurator and Native .EXE Builder with 1-second low-overhead hardware telemetry and system tray configuration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
