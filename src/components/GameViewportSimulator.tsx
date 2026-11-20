@@ -14,16 +14,14 @@ import {
   Check,
   Volume2,
   Wifi,
-  ShieldCheck,
-  Sliders,
   Eye,
   EyeOff,
   Lock,
   Unlock,
   Pause,
   Play,
-  Sparkles,
   Layers,
+  FileText,
 } from 'lucide-react';
 
 interface GameViewportSimulatorProps {
@@ -131,10 +129,24 @@ export const GameViewportSimulator: React.FC<GameViewportSimulatorProps> = ({
       color: config.textColor,
     });
   }
+  if (config.showVramLoad) {
+    segments.push({
+      id: 'vram',
+      text: `VRAM ${telemetry.vramLoad}%`,
+      color: config.textColor,
+    });
+  }
   if (config.showCpuLoad) {
     segments.push({
       id: 'cpu',
       text: `CPU ${telemetry.cpuLoad}%`,
+      color: config.textColor,
+    });
+  }
+  if (config.showRamLoad) {
+    segments.push({
+      id: 'ram',
+      text: `RAM ${telemetry.ramLoad}%`,
       color: config.textColor,
     });
   }
@@ -291,7 +303,7 @@ export const GameViewportSimulator: React.FC<GameViewportSimulatorProps> = ({
         {trayMenuOpen && (
           <div
             onClick={(e) => e.stopPropagation()}
-            className="absolute bottom-12 right-3 z-30 w-72 rounded-lg bg-[#181F2C]/95 backdrop-blur-md border border-slate-700/90 shadow-2xl text-xs text-slate-200 py-1.5 font-sans"
+            className="absolute bottom-12 right-3 z-30 w-76 rounded-lg bg-[#181F2C]/95 backdrop-blur-md border border-slate-700/90 shadow-2xl text-xs text-slate-200 py-1.5 font-sans"
           >
             <div className="px-3 py-1.5 border-b border-slate-700/80 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -300,11 +312,11 @@ export const GameViewportSimulator: React.FC<GameViewportSimulatorProps> = ({
                   style={{ backgroundColor: config.accentColor }}
                 />
                 <span className="font-semibold text-slate-100">
-                  FramePulseHUD.exe
+                  SageFPSOverlay.exe
                 </span>
               </div>
               <span className="text-[11px] font-mono text-emerald-400">
-                1.0s Poll
+                Portable .INI
               </span>
             </div>
 
@@ -459,7 +471,9 @@ export const GameViewportSimulator: React.FC<GameViewportSimulatorProps> = ({
                       ['showGenFps', 'Generated Frames (+FG)'],
                       ['showFgStatus', 'Frame Gen Status'],
                       ['showGpuLoad', 'GPU Utilization %'],
+                      ['showVramLoad', 'VRAM Utilization %'],
                       ['showCpuLoad', 'CPU Utilization %'],
+                      ['showRamLoad', 'System Memory (RAM) %'],
                     ] as const
                   ).map(([key, label]) => (
                     <button
@@ -501,6 +515,20 @@ export const GameViewportSimulator: React.FC<GameViewportSimulatorProps> = ({
 
               <button
                 type="button"
+                onClick={() => {
+                  setTrayMenuOpen(false);
+                  onOpenCompilerModal();
+                }}
+                className="w-full px-3 py-1.5 hover:bg-slate-700/60 flex items-center justify-between text-left"
+              >
+                <span className="flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Open Portable Config (SageFPSOverlay.ini)</span>
+                </span>
+              </button>
+
+              <button
+                type="button"
                 onClick={onToggleOverlayVisible}
                 className="w-full px-3 py-1.5 hover:bg-slate-700/60 flex items-center justify-between text-left"
               >
@@ -533,7 +561,7 @@ export const GameViewportSimulator: React.FC<GameViewportSimulatorProps> = ({
           </div>
         )}
 
-        {/* Top-left subtle process watermark inside viewport */}
+        {/* Top-left subtle spacer inside viewport */}
         <div className="relative z-10 pointer-events-none p-3 flex items-center justify-between">
           <div />
         </div>
@@ -550,7 +578,7 @@ export const GameViewportSimulator: React.FC<GameViewportSimulatorProps> = ({
             <span aria-hidden="true">·</span>
             <span className="text-slate-300">
               {config.clickThrough
-                ? 'WS_EX_TRANSPARENT (Mouse Click-Through Active)'
+                ? 'WS_EX_TRANSPARENT · SageFPSOverlay.ini (Portable)'
                 : 'Interactive Window Mode'}
             </span>
           </div>
@@ -572,7 +600,7 @@ export const GameViewportSimulator: React.FC<GameViewportSimulatorProps> = ({
                 style={{ backgroundColor: config.accentColor }}
               />
               <span className="whitespace-nowrap">
-                FramePulse Tray Config
+                SageFPSOverlay Tray Config
               </span>
               <ChevronUp
                 className={`w-3.5 h-3.5 transition-transform ${
@@ -592,13 +620,14 @@ export const GameViewportSimulator: React.FC<GameViewportSimulatorProps> = ({
         </div>
       </div>
 
-      {/* Bottom Telemetry Breakdown Bar (Explains exact math & 1.0s polling) */}
+      {/* Bottom Telemetry Breakdown Bar */}
       <div className="w-full max-w-[1160px] mx-auto mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
         <div className="bg-[#111827] border border-slate-800/90 rounded-lg p-3.5 flex items-center justify-between">
           <div>
             <div className="text-xs text-slate-400">Total Output FPS</div>
             <div className="text-xl font-bold font-mono tabular-nums text-slate-100 mt-0.5">
-              {telemetry.totalFps} <span className="text-xs font-normal text-slate-400">fps</span>
+              {telemetry.totalFps}{' '}
+              <span className="text-xs font-normal text-slate-400">fps</span>
             </div>
           </div>
           <div className="text-right font-mono text-xs text-slate-400">
@@ -611,7 +640,9 @@ export const GameViewportSimulator: React.FC<GameViewportSimulatorProps> = ({
           <div>
             <div className="text-xs text-slate-400">Frame Generation</div>
             <div className="text-sm font-semibold font-mono text-slate-100 mt-1">
-              {telemetry.fgActive ? `${telemetry.fgTech} Active` : 'Native Render Only'}
+              {telemetry.fgActive
+                ? `${telemetry.fgTech} Active`
+                : 'Native Render Only'}
             </div>
           </div>
           <span className="text-xs font-mono text-amber-400 tabular-nums">
@@ -621,22 +652,22 @@ export const GameViewportSimulator: React.FC<GameViewportSimulatorProps> = ({
 
         <div className="bg-[#111827] border border-slate-800/90 rounded-lg p-3.5 flex items-center justify-between">
           <div>
-            <div className="text-xs text-slate-400">Hardware Telemetry</div>
-            <div className="text-sm font-semibold font-mono tabular-nums text-slate-100 mt-1">
-              GPU {telemetry.gpuLoad}% · CPU {telemetry.cpuLoad}%
+            <div className="text-xs text-slate-400">GPU, VRAM, CPU &amp; RAM</div>
+            <div className="text-xs font-semibold font-mono tabular-nums text-slate-100 mt-1">
+              GPU {telemetry.gpuLoad}% · VRAM {telemetry.vramLoad}% · CPU{' '}
+              {telemetry.cpuLoad}% · RAM {telemetry.ramLoad}%
             </div>
           </div>
-          <span className="text-xs text-slate-400 font-mono">Win32 Counters</span>
         </div>
 
         <div className="bg-[#111827] border border-slate-800/90 rounded-lg p-3.5 flex items-center justify-between">
           <div>
-            <div className="text-xs text-slate-400">Update Overhead</div>
+            <div className="text-xs text-slate-400">Portable Config &amp; Poll</div>
             <div className="text-sm font-semibold font-mono tabular-nums text-emerald-400 mt-1">
-              1,000 ms (1.0 Hz)
+              SageFPSOverlay.ini
             </div>
           </div>
-          <span className="text-xs text-slate-400 font-mono">&lt;0.05% CPU</span>
+          <span className="text-xs text-slate-400 font-mono">1.0s Tick</span>
         </div>
       </div>
     </div>

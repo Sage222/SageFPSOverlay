@@ -42,6 +42,8 @@ export interface OverlayConfig {
   showFgStatus: boolean;
   showGpuLoad: boolean;
   showCpuLoad: boolean;
+  showVramLoad: boolean;
+  showRamLoad: boolean;
 }
 
 export interface TelemetrySnapshot {
@@ -53,6 +55,8 @@ export interface TelemetrySnapshot {
   fgMultiplier: string;
   gpuLoad: number;
   cpuLoad: number;
+  vramLoad: number;
+  ramLoad: number;
   processName: string;
   lastUpdated: string;
   tickCount: number;
@@ -69,6 +73,8 @@ export interface GameScenePreset {
   fgMultiplierNum: number;
   baseGpuLoad: number;
   baseCpuLoad: number;
+  baseVramLoad: number;
+  baseRamLoad: number;
 }
 
 export const COLOR_THEMES: ColorThemePreset[] = [
@@ -131,6 +137,8 @@ export const GAME_SCENES: GameScenePreset[] = [
     fgMultiplierNum: 2,
     baseGpuLoad: 96,
     baseCpuLoad: 44,
+    baseVramLoad: 82,
+    baseRamLoad: 64,
   },
   {
     id: 'alpine-horizon',
@@ -143,6 +151,8 @@ export const GAME_SCENES: GameScenePreset[] = [
     fgMultiplierNum: 2,
     baseGpuLoad: 91,
     baseCpuLoad: 52,
+    baseVramLoad: 71,
+    baseRamLoad: 58,
   },
   {
     id: 'motorsport-track',
@@ -155,6 +165,8 @@ export const GAME_SCENES: GameScenePreset[] = [
     fgMultiplierNum: 1,
     baseGpuLoad: 84,
     baseCpuLoad: 38,
+    baseVramLoad: 54,
+    baseRamLoad: 47,
   },
 ];
 
@@ -181,4 +193,6 @@ export const DEFAULT_OVERLAY_CONFIG: OverlayConfig = {
   showFgStatus: true,
   showGpuLoad: true,
   showCpuLoad: true,
+  showVramLoad: true,
+  showRamLoad: true,
 };

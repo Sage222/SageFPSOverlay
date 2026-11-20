@@ -15,7 +15,7 @@ function hexToRgbTuple(hex: string): { r: number; g: number; b: number } {
 }
 
 /**
- * Generates a complete, standalone, self-compiling C# Win32/WinForms application (FramePulseHUD.cs)
+ * Generates a complete, standalone, self-compiling C# Win32/WinForms application (SageFPSOverlay.cs)
  * that compiles cleanly with Windows' built-in .NET Framework 4.x csc.exe without external NuGet dependencies.
  */
 export function generateCSharpSource(config: OverlayConfig): string {
@@ -34,25 +34,23 @@ export function generateCSharpSource(config: OverlayConfig): string {
   }).join(',\n            ');
 
   return `// ============================================================================
-// FramePulse HUD v3 — Native Windows Game Framerate & Frame Generation Overlay
+// SageFPSOverlay — Portable Windows Game Framerate & Hardware Telemetry Overlay
 // Target: .NET Framework 4.7.2 / 4.8 (64-bit built-in Windows 10/11 csc.exe)
 //
-// Dual Real-Time Game Framerate Engines (No Fake "1 FPS" Fallback!):
-//  1. Primary Engine (PresentMon ETW Architecture):
-//     Real-time Event Tracing for Windows (ETW) consumer on a background thread
-//     subscribing to:
-//      - Microsoft-Windows-DXGI ({CA11C036-0102-4A2D-A6AD-F03CFED5D3C9})
-//      - Microsoft-Windows-D3D9 ({783ACA0A-790E-4D7F-8451-AA850511C6B9})
-//      - Microsoft-Windows-DxgKrnl ({802EC45A-1E99-4B83-9920-87C98277BA9D})
-//     Counts actual per-process IDXGISwapChain::Present calls for the active
-//     foreground game PID.
-//  2. Secondary Engine (DXGI Desktop Duplication Output1 Frame Counter):
-//     Uses D3D11CreateDevice + IDXGIOutput1::DuplicateOutput + AcquireNextFrame
-//     to read DXGI_OUTDUPL_FRAME_INFO.AccumulatedFrames & LastPresentTime
-//     directly from the GPU display output (works even without Admin rights).
-//  3. UI Update Governance:
-//     The HUD window and hardware counters only redraw once every 1,000ms (1.0s)
-//     to keep CPU/GPU system overhead near zero.
+// Features:
+//  1. Dual Real-Time Game Framerate Engines:
+//     - Primary: PresentMon-style ETW consumer (Microsoft-Windows-DXGI, D3D9, DxgKrnl)
+//     - Secondary: DXGI Output1 Desktop Duplication (AcquireNextFrame)
+//  2. Complete Hardware & Memory Telemetry (Toggleable On/Off):
+//     - Total FPS, Base Rendered FPS, Generated Frames (+FG), Frame Gen Status
+//     - GPU 3D Utilization %, CPU Utilization %
+//     - VRAM Utilization % (Dedicated GPU Adapter Memory / DXGI Adapter Desc)
+//     - System RAM Utilization % (Win32 GlobalMemoryStatusEx dwMemoryLoad)
+//  3. Portable Settings Persistence:
+//     - Reads and saves all customizations automatically to "SageFPSOverlay.ini"
+//       stored in the same folder next to "SageFPSOverlay.exe"
+//  4. Always-On-Top & 1.0s Low-Overhead Polling:
+//     - Strict 1,000ms timer tick + persistent SetWindowPos(HWND_TOPMOST)
 // ============================================================================
 
 using System;
@@ -62,13 +60,14 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Threading;
 using System.Windows.Forms;
 
-namespace FramePulseHUD
+namespace SageFPSOverlay
 {
     public class ThemePreset
     {
@@ -95,7 +94,7 @@ namespace FramePulseHUD
     // ========================================================================
     public static class EtwPresentCounter
     {
-        private const string SESSION_NAME = "FramePulseHUD_DXGI_Session";
+        private const string SESSION_NAME = "SageFPSOverlay_DXGI_Session";
 
         private static readonly Guid DXGI_PROVIDER = new Guid("CA11C036-0102-4A2D-A6AD-F03CFED5D3C9");
         private static readonly Guid D3D9_PROVIDER = new Guid("783ACA0A-790E-4D7F-8451-AA850511C6B9");
@@ -186,7 +185,6 @@ namespace FramePulseHUD
         [DllImport("advapi32.dll", SetLastError = true)]
         private static extern uint CloseTrace(ulong traceHandle);
 
-        // Per-PID atomic frame counters
         private static readonly ConcurrentDictionary<uint, int> dxgiPresentsByPid = new ConcurrentDictionary<uint, int>();
         private static readonly ConcurrentDictionary<uint, int> dxgkrnlPresentsByPid = new ConcurrentDictionary<uint, int>();
 
@@ -198,19 +196,18 @@ namespace FramePulseHUD
 
         private static IntPtr AllocTraceProperties()
         {
-            // EVENT_TRACE_PROPERTIES is 120 bytes on x64 + room for session name string
             int totalSize = 1024;
             IntPtr ptr = Marshal.AllocHGlobal(totalSize);
             for (int i = 0; i < totalSize; i++) Marshal.WriteByte(ptr, i, 0);
 
-            Marshal.WriteInt32(ptr, 0, totalSize); // Wnode.BufferSize
-            Marshal.WriteInt32(ptr, 44, (int)WNODE_FLAG_TRACED_GUID); // Wnode.Flags
-            Marshal.WriteInt32(ptr, 48, 64); // BufferSize (64 KB)
-            Marshal.WriteInt32(ptr, 52, 4);  // MinimumBuffers
-            Marshal.WriteInt32(ptr, 56, 32); // MaximumBuffers
-            Marshal.WriteInt32(ptr, 64, (int)EVENT_TRACE_REAL_TIME_MODE); // LogFileMode
-            Marshal.WriteInt32(ptr, 68, 1);  // FlushTimer (1 second)
-            Marshal.WriteInt32(ptr, 116, 120); // LoggerNameOffset (immediately after 120-byte struct)
+            Marshal.WriteInt32(ptr, 0, totalSize);
+            Marshal.WriteInt32(ptr, 44, (int)WNODE_FLAG_TRACED_GUID);
+            Marshal.WriteInt32(ptr, 48, 64);
+            Marshal.WriteInt32(ptr, 52, 4);
+            Marshal.WriteInt32(ptr, 56, 32);
+            Marshal.WriteInt32(ptr, 64, (int)EVENT_TRACE_REAL_TIME_MODE);
+            Marshal.WriteInt32(ptr, 68, 1);
+            Marshal.WriteInt32(ptr, 116, 120);
 
             return ptr;
         }
@@ -222,7 +219,7 @@ namespace FramePulseHUD
 
             consumerThread = new Thread(TraceWorkerLoop);
             consumerThread.IsBackground = true;
-            consumerThread.Name = "FramePulse_ETW_PresentMon";
+            consumerThread.Name = "SageFPS_ETW_PresentMon";
             consumerThread.Start();
         }
 
@@ -234,7 +231,6 @@ namespace FramePulseHUD
 
             try
             {
-                // Stop any stale session from a previous run
                 ControlTraceW(0, SESSION_NAME, propsPtr, EVENT_CONTROL_CODE_STOP_TRACE);
 
                 Marshal.FreeHGlobal(propsPtr);
@@ -251,23 +247,16 @@ namespace FramePulseHUD
                 Guid d3d9 = D3D9_PROVIDER;
                 Guid dxgkrnl = DXGKRNL_PROVIDER;
 
-                // Enable Microsoft-Windows-DXGI & D3D9 Present providers
                 EnableTraceEx2(activeSessionHandle, ref dxgi, EVENT_CONTROL_CODE_ENABLE_PROVIDER, 5, 0, 0, 0, IntPtr.Zero);
                 EnableTraceEx2(activeSessionHandle, ref d3d9, EVENT_CONTROL_CODE_ENABLE_PROVIDER, 5, 0, 0, 0, IntPtr.Zero);
-                // Enable Microsoft-Windows-DxgKrnl (Base keyword 0x1 captures flip/present tokens for Frame Generation)
                 EnableTraceEx2(activeSessionHandle, ref dxgkrnl, EVENT_CONTROL_CODE_ENABLE_PROVIDER, 4, 0x1, 0, 0, IntPtr.Zero);
 
-                // Allocate 512-byte zeroed memory block for 64-bit EVENT_TRACE_LOGFILEW (432 bytes on x64)
                 logfilePtr = Marshal.AllocHGlobal(512);
                 for (int i = 0; i < 512; i++) Marshal.WriteByte(logfilePtr, i, 0);
 
                 sessionNamePtr = Marshal.StringToHGlobalUni(SESSION_NAME);
                 IntPtr fnPtr = Marshal.GetFunctionPointerForDelegate(callbackDelegate);
 
-                // Exact x64 offsets for EVENT_TRACE_LOGFILEW:
-                // Offset 8   : LPWSTR LoggerName
-                // Offset 32  : ULONG ProcessTraceMode
-                // Offset 408 : PEVENT_RECORD_CALLBACK EventRecordCallback (on x64)
                 Marshal.WriteIntPtr(logfilePtr, 8, sessionNamePtr);
                 Marshal.WriteInt32(logfilePtr, 32, unchecked((int)(PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD)));
                 Marshal.WriteIntPtr(logfilePtr, 408, fnPtr);
@@ -275,7 +264,6 @@ namespace FramePulseHUD
                 activeTraceHandle = OpenTraceW(logfilePtr);
                 if (activeTraceHandle == 0 || activeTraceHandle == ulong.MaxValue)
                 {
-                    // Fallback check: some Windows builds align TRACE_LOGFILE_HEADER at offset 392 or 400
                     Marshal.WriteIntPtr(logfilePtr, 392, fnPtr);
                     Marshal.WriteIntPtr(logfilePtr, 400, fnPtr);
                     activeTraceHandle = OpenTraceW(logfilePtr);
@@ -310,7 +298,6 @@ namespace FramePulseHUD
 
             if (provider == DXGI_PROVIDER)
             {
-                // Microsoft-Windows-DXGI Present_Start is Event ID 42 (Opcode 1 = Start)
                 if (id == 42 || (opcode == 1 && id >= 40 && id <= 55))
                 {
                     dxgiPresentsByPid.AddOrUpdate(pid, 1, (k, v) => v + 1);
@@ -318,7 +305,6 @@ namespace FramePulseHUD
             }
             else if (provider == D3D9_PROVIDER)
             {
-                // Microsoft-Windows-D3D9 Present_Start is Event ID 1
                 if (id == 1)
                 {
                     dxgiPresentsByPid.AddOrUpdate(pid, 1, (k, v) => v + 1);
@@ -326,7 +312,6 @@ namespace FramePulseHUD
             }
             else if (provider == DXGKRNL_PROVIDER)
             {
-                // DxgKrnl Present_Start (184) / PresentHistory_Start (171) / Flip (168)
                 if (id == 184 || id == 171 || id == 168)
                 {
                     dxgkrnlPresentsByPid.AddOrUpdate(pid, 1, (k, v) => v + 1);
@@ -348,7 +333,6 @@ namespace FramePulseHUD
                     kernelFlips = val;
             }
 
-            // If foreground window is a launcher/wrapper child or another active 3D process has highest frames:
             if (dxgiFrames == 0)
             {
                 int maxFrames = 0;
@@ -390,7 +374,7 @@ namespace FramePulseHUD
     }
 
     // ========================================================================
-    // ENGINE 2: DXGI Desktop Duplication Output1 Frame Counter (Non-Admin Fallback)
+    // ENGINE 2: DXGI Desktop Duplication Output1 Frame Counter & Total VRAM Probe
     // ========================================================================
     public static class DxgiDuplicationCounter
     {
@@ -410,6 +394,22 @@ namespace FramePulseHUD
             out int pFeatureLevel,
             out IntPtr ppImmediateContext
         );
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct DXGI_ADAPTER_DESC
+        {
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+            public string Description;
+            public uint VendorId;
+            public uint DeviceId;
+            public uint SubSysId;
+            public uint Revision;
+            public UIntPtr DedicatedVideoMemory;
+            public UIntPtr DedicatedSystemMemory;
+            public UIntPtr SharedSystemMemory;
+            public uint AdapterLuidLow;
+            public int AdapterLuidHigh;
+        }
 
         [StructLayout(LayoutKind.Sequential)]
         private struct DXGI_OUTDUPL_POINTER_POSITION
@@ -437,6 +437,9 @@ namespace FramePulseHUD
         private delegate int GetAdapterDelegate(IntPtr thisPtr, out IntPtr ppAdapter);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        private delegate int GetAdapterDescDelegate(IntPtr thisPtr, out DXGI_ADAPTER_DESC pDesc);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate int EnumOutputsDelegate(IntPtr thisPtr, uint outputIndex, out IntPtr ppOutput);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
@@ -458,6 +461,9 @@ namespace FramePulseHUD
         private static volatile int accumulatedFramesInWindow = 0;
         private static volatile bool running = false;
 
+        // Total Dedicated VRAM in bytes queried directly from DXGI_ADAPTER_DESC (64-bit safe, bypasses 4GB registry cap)
+        public static ulong TotalDedicatedVramBytes = 0;
+
         private static IntPtr GetVTableMethod(IntPtr comObj, int slotIndex)
         {
             IntPtr vtable = Marshal.ReadIntPtr(comObj);
@@ -470,7 +476,7 @@ namespace FramePulseHUD
             running = true;
             duplThread = new Thread(DuplicationLoop);
             duplThread.IsBackground = true;
-            duplThread.Name = "FramePulse_DXGI_Dupl";
+            duplThread.Name = "SageFPS_DXGI_Dupl";
             duplThread.Start();
         }
 
@@ -480,7 +486,6 @@ namespace FramePulseHUD
             try
             {
                 int featureLevel;
-                // D3D_DRIVER_TYPE_HARDWARE = 1, D3D11_CREATE_DEVICE_BGRA_SUPPORT = 0x20, D3D11_SDK_VERSION = 7
                 int hr = D3D11CreateDevice(IntPtr.Zero, 1, IntPtr.Zero, 0x20, IntPtr.Zero, 0, 7, out d3dDevice, out featureLevel, out d3dContext);
                 if (hr < 0 || d3dDevice == IntPtr.Zero) return false;
 
@@ -489,14 +494,26 @@ namespace FramePulseHUD
                 hr = Marshal.QueryInterface(d3dDevice, ref iidDxgiDevice, out dxgiDevice);
                 if (hr < 0 || dxgiDevice == IntPtr.Zero) return false;
 
-                // IDXGIDevice::GetAdapter is VTable slot 7 (IUnknown 0..2, IDXGIObject 3..6, IDXGIDevice::GetAdapter = 7)
                 var getAdapter = (GetAdapterDelegate)Marshal.GetDelegateForFunctionPointer(GetVTableMethod(dxgiDevice, 7), typeof(GetAdapterDelegate));
                 IntPtr dxgiAdapter = IntPtr.Zero;
                 hr = getAdapter(dxgiDevice, out dxgiAdapter);
                 Marshal.Release(dxgiDevice);
                 if (hr < 0 || dxgiAdapter == IntPtr.Zero) return false;
 
-                // IDXGIAdapter::EnumOutputs is VTable slot 7
+                // Query 64-bit DedicatedVideoMemory from IDXGIAdapter::GetDesc (VTable slot 8)
+                try
+                {
+                    var getDesc = (GetAdapterDescDelegate)Marshal.GetDelegateForFunctionPointer(GetVTableMethod(dxgiAdapter, 8), typeof(GetAdapterDescDelegate));
+                    DXGI_ADAPTER_DESC adapterDesc;
+                    if (getDesc(dxgiAdapter, out adapterDesc) >= 0)
+                    {
+                        ulong vram = adapterDesc.DedicatedVideoMemory.ToUInt64();
+                        if (vram > TotalDedicatedVramBytes)
+                            TotalDedicatedVramBytes = vram;
+                    }
+                }
+                catch { }
+
                 var enumOutputs = (EnumOutputsDelegate)Marshal.GetDelegateForFunctionPointer(GetVTableMethod(dxgiAdapter, 7), typeof(EnumOutputsDelegate));
                 IntPtr dxgiOutput = IntPtr.Zero;
                 hr = enumOutputs(dxgiAdapter, 0, out dxgiOutput);
@@ -509,13 +526,11 @@ namespace FramePulseHUD
                 Marshal.Release(dxgiOutput);
                 if (hr < 0 || dxgiOutput1 == IntPtr.Zero) return false;
 
-                // IDXGIOutput1::DuplicateOutput is VTable slot 22
                 var duplicateOutput = (DuplicateOutputDelegate)Marshal.GetDelegateForFunctionPointer(GetVTableMethod(dxgiOutput1, 22), typeof(DuplicateOutputDelegate));
                 hr = duplicateOutput(dxgiOutput1, d3dDevice, out outputDupl);
                 Marshal.Release(dxgiOutput1);
                 if (hr < 0 || outputDupl == IntPtr.Zero) return false;
 
-                // IDXGIOutputDuplication::AcquireNextFrame is VTable slot 8, ReleaseFrame is slot 14
                 acquireNextFrameFn = (AcquireNextFrameDelegate)Marshal.GetDelegateForFunctionPointer(GetVTableMethod(outputDupl, 8), typeof(AcquireNextFrameDelegate));
                 releaseFrameFn = (ReleaseFrameDelegate)Marshal.GetDelegateForFunctionPointer(GetVTableMethod(outputDupl, 14), typeof(ReleaseFrameDelegate));
                 return true;
@@ -545,7 +560,7 @@ namespace FramePulseHUD
                     IntPtr desktopRes = IntPtr.Zero;
                     int hr = acquireNextFrameFn(outputDupl, 100, out info, out desktopRes);
 
-                    if (hr == 0) // S_OK
+                    if (hr == 0)
                     {
                         if (desktopRes != IntPtr.Zero) Marshal.Release(desktopRes);
                         if (info.LastPresentTime > 0)
@@ -555,13 +570,12 @@ namespace FramePulseHUD
                         }
                         releaseFrameFn(outputDupl);
                     }
-                    else if (hr == unchecked((int)0x887A0027)) // DXGI_ERROR_WAIT_TIMEOUT
+                    else if (hr == unchecked((int)0x887A0027))
                     {
-                        // Timeout without new desktop frame
+                        // Timeout
                     }
                     else
                     {
-                        // Access lost on fullscreen switch — reinitialize cleanly
                         CleanupDuplication();
                         Thread.Sleep(250);
                     }
@@ -594,7 +608,7 @@ namespace FramePulseHUD
     }
 
     // ========================================================================
-    // MAIN OVERLAY WINDOW & 1-SECOND TELEMETRY CONTROLLER
+    // MAIN OVERLAY WINDOW, PORTABLE CONFIG (.INI) & 1-SECOND TELEMETRY CONTROLLER
     // ========================================================================
     public class OverlayForm : Form
     {
@@ -638,6 +652,25 @@ namespace FramePulseHUD
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
+        // Win32 System Memory Utilization % (GlobalMemoryStatusEx)
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        private struct MEMORYSTATUSEX
+        {
+            public uint dwLength;
+            public uint dwMemoryLoad;
+            public ulong ullTotalPhys;
+            public ulong ullAvailPhys;
+            public ulong ullTotalPageFile;
+            public ulong ullAvailPageFile;
+            public ulong ullTotalVirtual;
+            public ulong ullAvailVirtual;
+            public ulong ullAvailExtendedVirtual;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
+
         // Process inspection via Win32 Toolhelp32 Snapshot for Frame Generation DLLs
         private const uint TH32CS_SNAPMODULE = 0x00000008;
         private const uint TH32CS_SNAPMODULE32 = 0x00000010;
@@ -671,10 +704,14 @@ namespace FramePulseHUD
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool CloseHandle(IntPtr hObject);
 
-        // User Configuration State
+        // Portable configuration file path stored directly beside SageFPSOverlay.exe
+        private readonly string portableIniPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "SageFPSOverlay.ini");
+
+        // User Configuration State (Defaults set by Web Studio, overridden by SageFPSOverlay.ini if present)
         private string currentPosition = "${config.position}";
         private int marginX = ${config.marginX};
         private int marginY = ${config.marginY};
+        private string currentThemeId = "${config.themeId}";
         private Color accentColor = Color.FromArgb(${accent.r}, ${accent.g}, ${accent.b});
         private Color fgAccentColor = Color.FromArgb(${fgAccent.r}, ${fgAccent.g}, ${fgAccent.b});
         private Color textColor = Color.FromArgb(${text.r}, ${text.g}, ${text.b});
@@ -694,6 +731,8 @@ namespace FramePulseHUD
         private bool showFgStatus = ${config.showFgStatus ? 'true' : 'false'};
         private bool showGpuLoad = ${config.showGpuLoad ? 'true' : 'false'};
         private bool showCpuLoad = ${config.showCpuLoad ? 'true' : 'false'};
+        private bool showVramLoad = ${config.showVramLoad ? 'true' : 'false'};
+        private bool showRamLoad = ${config.showRamLoad ? 'true' : 'false'};
 
         private string fgModeOverride = "AUTO";
 
@@ -705,12 +744,15 @@ namespace FramePulseHUD
         private string fgTechName = "OFF";
         private int currentGpuLoad = 0;
         private int currentCpuLoad = 0;
+        private int currentVramLoad = 0;
+        private int currentRamLoad = 0;
 
         // Timers & Counters
         private System.Windows.Forms.Timer telemetryTimer;
         private Stopwatch sampleWatch = new Stopwatch();
         private PerformanceCounter cpuCounter;
         private List<PerformanceCounter> gpu3DCounters = new List<PerformanceCounter>();
+        private List<PerformanceCounter> vramUsageCounters = new List<PerformanceCounter>();
         private DateTime lastGpuCounterRefresh = DateTime.MinValue;
         private uint lastTrackedPid = 0;
         private bool lastDetectedFgDll = false;
@@ -727,6 +769,9 @@ namespace FramePulseHUD
 
         public OverlayForm()
         {
+            // Load saved portable settings from SageFPSOverlay.ini next to the .exe (or create it on first run)
+            LoadPortableSettings();
+
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
             TopMost = true;
@@ -735,9 +780,9 @@ namespace FramePulseHUD
 
             BackColor = Color.FromArgb(1, 2, 3);
             TransparencyKey = Color.FromArgb(1, 2, 3);
-            Opacity = Math.Min(0.98, Math.Max(0.20, bgAlpha / 255.0));
+            Opacity = Math.Min(0.98, Math.Max(0.15, bgAlpha / 255.0));
 
-            Width = 540;
+            Width = 640;
             Height = 44;
 
             // Start both real-time frame capture engines
@@ -758,6 +803,169 @@ namespace FramePulseHUD
             telemetryTimer.Interval = pollIntervalMs;
             telemetryTimer.Tick += (s, e) => SampleTelemetryOnce();
             telemetryTimer.Start();
+        }
+
+        private static string ColorToHex(Color c)
+        {
+            return string.Format("#{0:X2}{1:X2}{2:X2}", c.R, c.G, c.B);
+        }
+
+        private static Color ParseHexColor(string hex, Color fallback)
+        {
+            if (string.IsNullOrEmpty(hex)) return fallback;
+            string clean = hex.Trim().TrimStart('#');
+            if (clean.Length != 6) return fallback;
+            int r, g, b;
+            if (int.TryParse(clean.Substring(0, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out r) &&
+                int.TryParse(clean.Substring(2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out g) &&
+                int.TryParse(clean.Substring(4, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out b))
+            {
+                return Color.FromArgb(r, g, b);
+            }
+            return fallback;
+        }
+
+        private void LoadPortableSettings()
+        {
+            try
+            {
+                if (!File.Exists(portableIniPath))
+                {
+                    SavePortableSettings();
+                    return;
+                }
+
+                string[] lines = File.ReadAllLines(portableIniPath);
+                foreach (string rawLine in lines)
+                {
+                    string line = rawLine.Trim();
+                    if (line.Length == 0 || line.StartsWith("#") || line.StartsWith(";") || line.StartsWith("["))
+                        continue;
+
+                    int eq = line.IndexOf('=');
+                    if (eq <= 0) continue;
+
+                    string key = line.Substring(0, eq).Trim();
+                    string val = line.Substring(eq + 1).Trim();
+
+                    int intVal;
+                    bool boolVal;
+
+                    switch (key)
+                    {
+                        case "Position":
+                            currentPosition = val;
+                            break;
+                        case "MarginX":
+                            if (int.TryParse(val, out intVal)) marginX = Math.Max(0, Math.Min(200, intVal));
+                            break;
+                        case "MarginY":
+                            if (int.TryParse(val, out intVal)) marginY = Math.Max(0, Math.Min(200, intVal));
+                            break;
+                        case "ThemeId":
+                            currentThemeId = val;
+                            break;
+                        case "AccentColor":
+                            accentColor = ParseHexColor(val, accentColor);
+                            break;
+                        case "FgAccentColor":
+                            fgAccentColor = ParseHexColor(val, fgAccentColor);
+                            break;
+                        case "TextColor":
+                            textColor = ParseHexColor(val, textColor);
+                            break;
+                        case "BgColor":
+                            bgColor = ParseHexColor(val, bgColor);
+                            break;
+                        case "BgAlpha":
+                            if (int.TryParse(val, out intVal)) bgAlpha = Math.Max(38, Math.Min(250, intVal));
+                            break;
+                        case "FontSizePx":
+                            if (int.TryParse(val, out intVal)) fontSizePx = Math.Max(10, Math.Min(24, intVal));
+                            break;
+                        case "PadX":
+                            if (int.TryParse(val, out intVal)) padX = Math.Max(6, Math.Min(32, intVal));
+                            break;
+                        case "PadY":
+                            if (int.TryParse(val, out intVal)) padY = Math.Max(2, Math.Min(20, intVal));
+                            break;
+                        case "ShowBorder":
+                            if (bool.TryParse(val, out boolVal)) showBorder = boolVal;
+                            break;
+                        case "ClickThrough":
+                            if (bool.TryParse(val, out boolVal)) clickThrough = boolVal;
+                            break;
+                        case "FgModeOverride":
+                            fgModeOverride = val;
+                            break;
+                        case "ShowTotalFps":
+                            if (bool.TryParse(val, out boolVal)) showTotalFps = boolVal;
+                            break;
+                        case "ShowBaseFps":
+                            if (bool.TryParse(val, out boolVal)) showBaseFps = boolVal;
+                            break;
+                        case "ShowGenFps":
+                            if (bool.TryParse(val, out boolVal)) showGenFps = boolVal;
+                            break;
+                        case "ShowFgStatus":
+                            if (bool.TryParse(val, out boolVal)) showFgStatus = boolVal;
+                            break;
+                        case "ShowGpuLoad":
+                            if (bool.TryParse(val, out boolVal)) showGpuLoad = boolVal;
+                            break;
+                        case "ShowCpuLoad":
+                            if (bool.TryParse(val, out boolVal)) showCpuLoad = boolVal;
+                            break;
+                        case "ShowVramLoad":
+                            if (bool.TryParse(val, out boolVal)) showVramLoad = boolVal;
+                            break;
+                        case "ShowRamLoad":
+                            if (bool.TryParse(val, out boolVal)) showRamLoad = boolVal;
+                            break;
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private void SavePortableSettings()
+        {
+            try
+            {
+                List<string> lines = new List<string>
+                {
+                    "; SageFPSOverlay Portable Configuration File",
+                    "; Stored next to SageFPSOverlay.exe so your settings travel with the executable.",
+                    "[Overlay]",
+                    "Position=" + currentPosition,
+                    "MarginX=" + marginX,
+                    "MarginY=" + marginY,
+                    "ThemeId=" + currentThemeId,
+                    "AccentColor=" + ColorToHex(accentColor),
+                    "FgAccentColor=" + ColorToHex(fgAccentColor),
+                    "TextColor=" + ColorToHex(textColor),
+                    "BgColor=" + ColorToHex(bgColor),
+                    "BgAlpha=" + bgAlpha,
+                    "FontSizePx=" + fontSizePx,
+                    "PadX=" + padX,
+                    "PadY=" + padY,
+                    "ShowBorder=" + showBorder.ToString(),
+                    "ClickThrough=" + clickThrough.ToString(),
+                    "FgModeOverride=" + fgModeOverride,
+                    "",
+                    "[Metrics]",
+                    "ShowTotalFps=" + showTotalFps.ToString(),
+                    "ShowBaseFps=" + showBaseFps.ToString(),
+                    "ShowGenFps=" + showGenFps.ToString(),
+                    "ShowFgStatus=" + showFgStatus.ToString(),
+                    "ShowGpuLoad=" + showGpuLoad.ToString(),
+                    "ShowCpuLoad=" + showCpuLoad.ToString(),
+                    "ShowVramLoad=" + showVramLoad.ToString(),
+                    "ShowRamLoad=" + showRamLoad.ToString()
+                };
+                File.WriteAllLines(portableIniPath, lines.ToArray());
+            }
+            catch { }
         }
 
         protected override CreateParams CreateParams
@@ -816,19 +1024,17 @@ namespace FramePulseHUD
             }
             catch { }
 
-            RefreshGpuEngineCounters();
+            RefreshGpuAndVramCounters();
         }
 
-        private void RefreshGpuEngineCounters()
+        private void RefreshGpuAndVramCounters()
         {
             if ((DateTime.UtcNow - lastGpuCounterRefresh).TotalSeconds < 25 && gpu3DCounters.Count > 0)
                 return;
 
             lastGpuCounterRefresh = DateTime.UtcNow;
-            foreach (var c in gpu3DCounters)
-            {
-                try { c.Dispose(); } catch { }
-            }
+
+            foreach (var c in gpu3DCounters) { try { c.Dispose(); } catch { } }
             gpu3DCounters.Clear();
 
             try
@@ -847,6 +1053,22 @@ namespace FramePulseHUD
                 }
             }
             catch { }
+
+            if (vramUsageCounters.Count == 0)
+            {
+                try
+                {
+                    PerformanceCounterCategory memCat = new PerformanceCounterCategory("GPU Adapter Memory");
+                    string[] memInstances = memCat.GetInstanceNames();
+                    foreach (string inst in memInstances)
+                    {
+                        PerformanceCounter pc = new PerformanceCounter("GPU Adapter Memory", "Dedicated Usage", inst, true);
+                        pc.NextValue();
+                        vramUsageCounters.Add(pc);
+                    }
+                }
+                catch { }
+            }
         }
 
         private void InspectProcessForFrameGenModules(uint pid)
@@ -907,7 +1129,7 @@ namespace FramePulseHUD
             if (elapsedSec < 0.25) elapsedSec = 1.0;
             sampleWatch.Restart();
 
-            // 1. Sample CPU Load
+            // 1. Sample CPU Load %
             try
             {
                 if (cpuCounter != null)
@@ -917,7 +1139,19 @@ namespace FramePulseHUD
             }
             catch { }
 
-            // 2. Identify Foreground Game PID & Sample 3D GPU Engine Utilization
+            // 2. Sample System Memory (RAM) Utilization % via GlobalMemoryStatusEx
+            try
+            {
+                MEMORYSTATUSEX memStatus = new MEMORYSTATUSEX();
+                memStatus.dwLength = (uint)Marshal.SizeOf(typeof(MEMORYSTATUSEX));
+                if (GlobalMemoryStatusEx(ref memStatus))
+                {
+                    currentRamLoad = (int)Math.Min(100u, Math.Max(0u, memStatus.dwMemoryLoad));
+                }
+            }
+            catch { }
+
+            // 3. Identify Foreground Game PID & Sample 3D GPU Engine + VRAM Utilization %
             uint fgPid = 0;
             try
             {
@@ -936,7 +1170,7 @@ namespace FramePulseHUD
             float fgProcessGpuLoad = 0f;
             try
             {
-                RefreshGpuEngineCounters();
+                RefreshGpuAndVramCounters();
                 float totalGpu = 0f;
                 string pidToken = fgPid > 0 ? ("pid_" + fgPid + "_") : "";
 
@@ -958,10 +1192,32 @@ namespace FramePulseHUD
                     }
                 }
                 currentGpuLoad = (int)Math.Round(Math.Min(100f, Math.Max(0f, totalGpu)));
+
+                // Sample Dedicated VRAM Usage across GPU Adapter Memory instances
+                ulong maxAdapterVramUsed = 0;
+                for (int i = vramUsageCounters.Count - 1; i >= 0; i--)
+                {
+                    try
+                    {
+                        ulong usedBytes = (ulong)Math.Max(0f, vramUsageCounters[i].NextValue());
+                        if (usedBytes > maxAdapterVramUsed)
+                            maxAdapterVramUsed = usedBytes;
+                    }
+                    catch
+                    {
+                        vramUsageCounters.RemoveAt(i);
+                    }
+                }
+
+                ulong totalVramBytes = DxgiDuplicationCounter.TotalDedicatedVramBytes;
+                if (totalVramBytes > 0 && maxAdapterVramUsed > 0)
+                {
+                    currentVramLoad = (int)Math.Round(Math.Min(100.0, (maxAdapterVramUsed * 100.0) / totalVramBytes));
+                }
             }
             catch { }
 
-            // 3. Consume Real Frame Counts from Engine 1 (ETW DXGI/DxgKrnl) and Engine 2 (DXGI Output1 Duplication)
+            // 4. Consume Real Frame Counts from Engine 1 (ETW DXGI/DxgKrnl) and Engine 2 (DXGI Output1 Duplication)
             int etwDxgiFrames = 0;
             int etwKernelFlips = 0;
             EtwPresentCounter.ConsumeProcessFrames(fgPid, out etwDxgiFrames, out etwKernelFlips);
@@ -972,7 +1228,6 @@ namespace FramePulseHUD
             int kernelFps = (int)Math.Round(etwKernelFlips / elapsedSec);
             int duplFps = (int)Math.Round(duplFrames / elapsedSec);
 
-            // Choose the highest verified hardware frame count
             int measuredTotalFps = 0;
             if (etwFps > 0)
             {
@@ -989,7 +1244,7 @@ namespace FramePulseHUD
 
             currentTotalFps = Math.Min(999, Math.Max(0, measuredTotalFps));
 
-            // 4. Split Base Rendered FPS vs Generated Frames (+FG)
+            // 5. Split Base Rendered FPS vs Generated Frames (+FG)
             int fgMult = 1;
             if (fgModeOverride == "2X")
             {
@@ -1017,9 +1272,6 @@ namespace FramePulseHUD
             }
             else
             {
-                // AUTO mode:
-                // Case A: Driver-level frame generation (e.g. Smooth Motion / AFMF) where Desktop Duplication
-                // or Kernel Flips see 2x more displayed frames than application DXGI Present calls
                 if (etwFps > 15 && duplFps >= (int)(etwFps * 1.45))
                 {
                     isFgActive = true;
@@ -1029,7 +1281,6 @@ namespace FramePulseHUD
                     currentGenFps = Math.Max(0, currentTotalFps - currentBaseFps);
                     fgMult = 0;
                 }
-                // Case B: In-process DLSS-G / FSR 3 FG where every interpolated frame invokes SwapChain::Present
                 else if (lastDetectedFgDll && currentTotalFps > 20 && (fgProcessGpuLoad > 10f || currentGpuLoad > 20))
                 {
                     isFgActive = true;
@@ -1084,8 +1335,14 @@ namespace FramePulseHUD
             if (showGpuLoad)
                 segments.Add(new KeyValuePair<string, Color>("GPU " + currentGpuLoad + "%", textColor));
 
+            if (showVramLoad)
+                segments.Add(new KeyValuePair<string, Color>("VRAM " + currentVramLoad + "%", textColor));
+
             if (showCpuLoad)
                 segments.Add(new KeyValuePair<string, Color>("CPU " + currentCpuLoad + "%", textColor));
+
+            if (showRamLoad)
+                segments.Add(new KeyValuePair<string, Color>("RAM " + currentRamLoad + "%", textColor));
 
             if (segments.Count == 0)
                 segments.Add(new KeyValuePair<string, Color>("FPS " + currentTotalFps, accentColor));
@@ -1248,7 +1505,7 @@ namespace FramePulseHUD
         {
             trayMenu = new ContextMenuStrip();
 
-            ToolStripMenuItem headerItem = new ToolStripMenuItem("FramePulse HUD v3 (ETW + DXGI 1.0s Poll)");
+            ToolStripMenuItem headerItem = new ToolStripMenuItem("SageFPSOverlay (Portable · 1.0s Poll)");
             headerItem.Enabled = false;
             trayMenu.Items.Add(headerItem);
             trayMenu.Items.Add(new ToolStripSeparator());
@@ -1274,6 +1531,7 @@ namespace FramePulseHUD
                     currentPosition = posKey;
                     foreach (ToolStripMenuItem child in posMenu.DropDownItems)
                         child.Checked = (child == item);
+                    SavePortableSettings();
                     UpdateWindowPosition();
                 };
                 posMenu.DropDownItems.Add(item);
@@ -1300,6 +1558,7 @@ namespace FramePulseHUD
                     fgModeOverride = mKey;
                     foreach (ToolStripMenuItem child in fgMenu.DropDownItems)
                         child.Checked = (child == item);
+                    SavePortableSettings();
                     SampleTelemetryOnce();
                 };
                 fgMenu.DropDownItems.Add(item);
@@ -1312,13 +1571,18 @@ namespace FramePulseHUD
             {
                 ThemePreset p = preset;
                 ToolStripMenuItem item = new ToolStripMenuItem(p.Name);
+                item.Checked = (currentThemeId == p.Id);
                 item.Click += (s, e) =>
                 {
+                    currentThemeId = p.Id;
                     accentColor = p.Accent;
                     fgAccentColor = p.FgAccent;
                     textColor = p.Text;
                     bgColor = p.Background;
+                    foreach (ToolStripMenuItem child in themeMenu.DropDownItems)
+                        child.Checked = (child == item);
                     trayIcon.Icon = CreateTrayIconGraphic();
+                    SavePortableSettings();
                     Invalidate();
                 };
                 themeMenu.DropDownItems.Add(item);
@@ -1334,35 +1598,43 @@ namespace FramePulseHUD
                 ToolStripMenuItem item = new ToolStripMenuItem(val + "% Translucent");
                 item.Click += (s, e) =>
                 {
+                    bgAlpha = (int)Math.Round((val / 100.0) * 255.0);
                     Opacity = val / 100.0;
+                    SavePortableSettings();
                     Invalidate();
                 };
                 opacityMenu.DropDownItems.Add(item);
             }
             trayMenu.Items.Add(opacityMenu);
 
-            // 5. Visible Metrics Submenu
+            // 5. Visible Metrics Submenu (Includes VRAM % and System Memory RAM %)
             ToolStripMenuItem metricsMenu = new ToolStripMenuItem("Displayed Metrics");
 
             ToolStripMenuItem mTotal = new ToolStripMenuItem("Total FPS") { Checked = showTotalFps, CheckOnClick = true };
-            mTotal.Click += (s, e) => { showTotalFps = mTotal.Checked; Invalidate(); };
+            mTotal.Click += (s, e) => { showTotalFps = mTotal.Checked; SavePortableSettings(); Invalidate(); };
 
             ToolStripMenuItem mBase = new ToolStripMenuItem("Base Rendered FPS") { Checked = showBaseFps, CheckOnClick = true };
-            mBase.Click += (s, e) => { showBaseFps = mBase.Checked; Invalidate(); };
+            mBase.Click += (s, e) => { showBaseFps = mBase.Checked; SavePortableSettings(); Invalidate(); };
 
             ToolStripMenuItem mGen = new ToolStripMenuItem("Generated Frames (+FG)") { Checked = showGenFps, CheckOnClick = true };
-            mGen.Click += (s, e) => { showGenFps = mGen.Checked; Invalidate(); };
+            mGen.Click += (s, e) => { showGenFps = mGen.Checked; SavePortableSettings(); Invalidate(); };
 
             ToolStripMenuItem mStatus = new ToolStripMenuItem("Frame Gen Active Status") { Checked = showFgStatus, CheckOnClick = true };
-            mStatus.Click += (s, e) => { showFgStatus = mStatus.Checked; Invalidate(); };
+            mStatus.Click += (s, e) => { showFgStatus = mStatus.Checked; SavePortableSettings(); Invalidate(); };
 
             ToolStripMenuItem mGpu = new ToolStripMenuItem("GPU Utilization %") { Checked = showGpuLoad, CheckOnClick = true };
-            mGpu.Click += (s, e) => { showGpuLoad = mGpu.Checked; Invalidate(); };
+            mGpu.Click += (s, e) => { showGpuLoad = mGpu.Checked; SavePortableSettings(); Invalidate(); };
+
+            ToolStripMenuItem mVram = new ToolStripMenuItem("VRAM Utilization %") { Checked = showVramLoad, CheckOnClick = true };
+            mVram.Click += (s, e) => { showVramLoad = mVram.Checked; SavePortableSettings(); Invalidate(); };
 
             ToolStripMenuItem mCpu = new ToolStripMenuItem("CPU Utilization %") { Checked = showCpuLoad, CheckOnClick = true };
-            mCpu.Click += (s, e) => { showCpuLoad = mCpu.Checked; Invalidate(); };
+            mCpu.Click += (s, e) => { showCpuLoad = mCpu.Checked; SavePortableSettings(); Invalidate(); };
 
-            metricsMenu.DropDownItems.AddRange(new ToolStripItem[] { mTotal, mBase, mGen, mStatus, mGpu, mCpu });
+            ToolStripMenuItem mRam = new ToolStripMenuItem("System Memory (RAM) %") { Checked = showRamLoad, CheckOnClick = true };
+            mRam.Click += (s, e) => { showRamLoad = mRam.Checked; SavePortableSettings(); Invalidate(); };
+
+            metricsMenu.DropDownItems.AddRange(new ToolStripItem[] { mTotal, mBase, mGen, mStatus, mGpu, mVram, mCpu, mRam });
             trayMenu.Items.Add(metricsMenu);
 
             // 6. Click-Through Lock
@@ -1374,11 +1646,21 @@ namespace FramePulseHUD
             clickItem.Click += (s, e) =>
             {
                 clickThrough = clickItem.Checked;
+                SavePortableSettings();
                 ApplyClickThroughState();
             };
             trayMenu.Items.Add(clickItem);
 
-            // 7. Toggle Overlay Visibility
+            // 7. Open Portable Config File (SageFPSOverlay.ini)
+            ToolStripMenuItem openIniItem = new ToolStripMenuItem("Open Portable Config (SageFPSOverlay.ini)");
+            openIniItem.Click += (s, e) =>
+            {
+                SavePortableSettings();
+                try { Process.Start("notepad.exe", portableIniPath); } catch { }
+            };
+            trayMenu.Items.Add(openIniItem);
+
+            // 8. Toggle Overlay Visibility
             ToolStripMenuItem toggleVis = new ToolStripMenuItem("Show / Hide Overlay (Ctrl+Shift+O)");
             toggleVis.Click += (s, e) =>
             {
@@ -1389,9 +1671,10 @@ namespace FramePulseHUD
 
             trayMenu.Items.Add(new ToolStripSeparator());
 
-            ToolStripMenuItem exitItem = new ToolStripMenuItem("Exit FramePulse HUD");
+            ToolStripMenuItem exitItem = new ToolStripMenuItem("Exit SageFPSOverlay");
             exitItem.Click += (s, e) =>
             {
+                SavePortableSettings();
                 telemetryTimer.Stop();
                 EtwPresentCounter.Stop();
                 DxgiDuplicationCounter.Stop();
@@ -1401,7 +1684,7 @@ namespace FramePulseHUD
             trayMenu.Items.Add(exitItem);
 
             trayIcon = new NotifyIcon();
-            trayIcon.Text = "FramePulse HUD — 1.0s Game Framerate Overlay";
+            trayIcon.Text = "SageFPSOverlay — Portable 1.0s Game Framerate Overlay";
             trayIcon.Icon = CreateTrayIconGraphic();
             trayIcon.ContextMenuStrip = trayMenu;
             trayIcon.Visible = true;
@@ -1424,6 +1707,7 @@ namespace FramePulseHUD
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            SavePortableSettings();
             UnregisterHotKey(this.Handle, HOTKEY_ID_TOGGLE);
             EtwPresentCounter.Stop();
             DxgiDuplicationCounter.Stop();
@@ -1450,9 +1734,6 @@ namespace FramePulseHUD
         [STAThread]
         public static void Main(string[] args)
         {
-            // Self-elevate to Administrator on launch if not already elevated so that:
-            //  1) Real-time ETW Microsoft-Windows-DXGI Present_Start tracing is permitted by Windows
-            //  2) SetWindowPos(HWND_TOPMOST) stays on top of elevated / anti-cheat games (UIPI)
             bool skipElevate = (args != null && args.Length > 0 && args[0] == "--no-elevate");
             if (!skipElevate && !IsRunningAsAdmin())
             {
@@ -1460,6 +1741,7 @@ namespace FramePulseHUD
                 {
                     ProcessStartInfo psi = new ProcessStartInfo();
                     psi.FileName = Application.ExecutablePath;
+                    psi.WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory;
                     psi.Arguments = "--no-elevate";
                     psi.Verb = "runas";
                     psi.UseShellExecute = true;
@@ -1468,7 +1750,7 @@ namespace FramePulseHUD
                 }
                 catch
                 {
-                    // User declined UAC prompt: continue running in non-admin mode using DXGI Desktop Duplication engine
+                    // Continue in non-admin mode if UAC is declined
                 }
             }
 
@@ -1482,48 +1764,97 @@ namespace FramePulseHUD
 }
 
 /**
- * Generates a zero-dependency self-compiling Windows Batch file (`Build_FramePulseHUD.bat`)
- * that extracts `FramePulseHUD.cs`, invokes the built-in Windows .NET Framework `csc.exe` compiler
- * with `/platform:x64`, builds `FramePulseHUD.exe`, and launches it.
+ * Generates a portable INI configuration file (`SageFPSOverlay.ini`) matching the user's studio settings.
+ */
+export function generatePortableIniConfig(config: OverlayConfig): string {
+  const alphaByte = Math.round(Math.min(0.95, Math.max(0.15, config.bgOpacity)) * 255);
+  return [
+    '; SageFPSOverlay Portable Configuration File',
+    '; Stored in the same folder next to SageFPSOverlay.exe so your settings travel with the app.',
+    '[Overlay]',
+    `Position=${config.position}`,
+    `MarginX=${config.marginX}`,
+    `MarginY=${config.marginY}`,
+    `ThemeId=${config.themeId}`,
+    `AccentColor=${config.accentColor.toUpperCase()}`,
+    `FgAccentColor=${config.fgAccentColor.toUpperCase()}`,
+    `TextColor=${config.textColor.toUpperCase()}`,
+    `BgColor=${config.bgColor.toUpperCase()}`,
+    `BgAlpha=${alphaByte}`,
+    `FontSizePx=${config.fontSize}`,
+    `PadX=${config.pillPaddingX}`,
+    `PadY=${config.pillPaddingY}`,
+    `ShowBorder=${config.showBorder ? 'True' : 'False'}`,
+    `ClickThrough=${config.clickThrough ? 'True' : 'False'}`,
+    'FgModeOverride=AUTO',
+    '',
+    '[Metrics]',
+    `ShowTotalFps=${config.showTotalFps ? 'True' : 'False'}`,
+    `ShowBaseFps=${config.showBaseFps ? 'True' : 'False'}`,
+    `ShowGenFps=${config.showGenFps ? 'True' : 'False'}`,
+    `ShowFgStatus=${config.showFgStatus ? 'True' : 'False'}`,
+    `ShowGpuLoad=${config.showGpuLoad ? 'True' : 'False'}`,
+    `ShowVramLoad=${config.showVramLoad ? 'True' : 'False'}`,
+    `ShowCpuLoad=${config.showCpuLoad ? 'True' : 'False'}`,
+    `ShowRamLoad=${config.showRamLoad ? 'True' : 'False'}`,
+  ].join('\r\n');
+}
+
+/**
+ * Generates a zero-dependency self-compiling Windows Batch file (`Build_SageFPSOverlay.bat`)
+ * that extracts `SageFPSOverlay.cs`, writes `SageFPSOverlay.ini` next to the executable if not already present
+ * (or updates it with the studio settings), compiles `SageFPSOverlay.exe`, and launches it.
  */
 export function generateSelfCompilingBatchScript(config: OverlayConfig): string {
   const csSource = generateCSharpSource(config);
-  const lines = csSource.split('\n');
+  const csLines = csSource.split('\n');
+  const base64CsPayload = btoa(unescape(encodeURIComponent(csLines.join('\r\n'))));
+  const chunkedCsBase64 = base64CsPayload.match(/.{1,76}/g) || [base64CsPayload];
 
-  const base64Payload = btoa(unescape(encodeURIComponent(lines.join('\r\n'))));
-  const chunkedBase64 = base64Payload.match(/.{1,76}/g) || [base64Payload];
+  const iniSource = generatePortableIniConfig(config);
+  const base64IniPayload = btoa(unescape(encodeURIComponent(iniSource)));
+  const chunkedIniBase64 = base64IniPayload.match(/.{1,76}/g) || [base64IniPayload];
 
   const batchLines: string[] = [
     '@echo off',
     'setlocal EnableDelayedExpansion',
-    'title FramePulse HUD v3 - Native Windows .EXE Compiler (ETW PresentMon + DXGI)',
+    'title SageFPSOverlay - Portable Native Windows .EXE Compiler',
     'echo ============================================================================',
-    'echo   FramePulse HUD v3 - Windows Game Framerate ^& Frame Generation Overlay',
-    'echo   Real-Time ETW Microsoft-Windows-DXGI + Desktop Duplication Engine',
+    'echo   SageFPSOverlay - Portable Windows Game Framerate ^& Telemetry Overlay',
+    'echo   Real-Time ETW DXGI + VRAM %% + System RAM %% + Portable .INI Config',
     'echo ============================================================================',
     'echo.',
     'cd /d "%~dp0"',
     '',
-    'echo [0/3] Stopping any running instance of FramePulseHUD.exe...',
+    'echo [0/4] Stopping any running instance of SageFPSOverlay.exe...',
+    'taskkill /f /im SageFPSOverlay.exe >nul 2>&1',
     'taskkill /f /im FramePulseHUD.exe >nul 2>&1',
     '',
-    'echo [1/3] Extracting custom C# Win32 Overlay source (FramePulseHUD.cs)...',
-    'del /q "FramePulseHUD.b64" 2>nul',
-    'del /q "FramePulseHUD.cs" 2>nul',
+    'echo [1/4] Extracting C# Win32 Overlay source (SageFPSOverlay.cs)...',
+    'del /q "SageFPSOverlay.b64" 2>nul',
+    'del /q "SageFPSOverlay.cs" 2>nul',
     '(',
-    ...chunkedBase64.map((chunk) => `  echo ${chunk}`),
-    ') > "FramePulseHUD.b64"',
+    ...chunkedCsBase64.map((chunk) => `  echo ${chunk}`),
+    ') > "SageFPSOverlay.b64"',
     '',
-    'certutil -decode -f "FramePulseHUD.b64" "FramePulseHUD.cs" >nul',
-    'del /q "FramePulseHUD.b64" 2>nul',
+    'certutil -decode -f "SageFPSOverlay.b64" "SageFPSOverlay.cs" >nul',
+    'del /q "SageFPSOverlay.b64" 2>nul',
     '',
-    'if not exist "FramePulseHUD.cs" (',
-    '  echo [ERROR] Failed to extract FramePulseHUD.cs.',
+    'if not exist "SageFPSOverlay.cs" (',
+    '  echo [ERROR] Failed to extract SageFPSOverlay.cs.',
     '  pause',
     '  exit /b 1',
     ')',
     '',
-    'echo [2/3] Locating built-in 64-bit Windows .NET Framework C# Compiler (csc.exe)...',
+    'echo [2/4] Writing portable settings file (SageFPSOverlay.ini) next to .exe...',
+    'del /q "SageFPSOverlay_ini.b64" 2>nul',
+    '(',
+    ...chunkedIniBase64.map((chunk) => `  echo ${chunk}`),
+    ') > "SageFPSOverlay_ini.b64"',
+    'certutil -decode -f "SageFPSOverlay_ini.b64" "SageFPSOverlay.ini" >nul',
+    'del /q "SageFPSOverlay_ini.b64" 2>nul',
+    '',
+    'echo [3/4] Locating built-in 64-bit Windows .NET Framework C# Compiler (csc.exe)...',
     'set "CSC_PATH=%WINDIR%\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe"',
     'if not exist "%CSC_PATH%" (',
     '  set "CSC_PATH=%WINDIR%\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe"',
@@ -1535,8 +1866,8 @@ export function generateSelfCompilingBatchScript(config: OverlayConfig): string 
     '  exit /b 1',
     ')',
     '',
-    'echo [3/3] Compiling standalone 64-bit native executable: FramePulseHUD.exe ...',
-    '"%CSC_PATH%" /nologo /target:winexe /platform:x64 /optimize+ /out:"FramePulseHUD.exe" /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll "FramePulseHUD.cs"',
+    'echo [4/4] Compiling standalone 64-bit portable executable: SageFPSOverlay.exe ...',
+    '"%CSC_PATH%" /nologo /target:winexe /platform:x64 /optimize+ /out:"SageFPSOverlay.exe" /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll "SageFPSOverlay.cs"',
     '',
     'if %ERRORLEVEL% NEQ 0 (',
     '  echo.',
@@ -1546,14 +1877,14 @@ export function generateSelfCompilingBatchScript(config: OverlayConfig): string 
     ')',
     '',
     'echo.',
-    'echo [SUCCESS] Built standalone executable: "%~dp0FramePulseHUD.exe"',
-    'echo   - FPS Engine 1     : Real-Time ETW Microsoft-Windows-DXGI Present_Start',
-    'echo   - FPS Engine 2     : DXGI Output1 Desktop Duplication Frame Counter',
+    'echo [SUCCESS] Built portable executable: "%~dp0SageFPSOverlay.exe"',
+    'echo   - Portable Config  : "%~dp0SageFPSOverlay.ini" (Auto-saves all Tray changes)',
+    'echo   - Telemetry        : FPS, Base FPS, +FG, GPU %%, VRAM %%, CPU %%, RAM %%',
     'echo   - Always-On-Top    : Elevated UIPI + SetWindowPos(HWND_TOPMOST)',
     'echo   - Refresh Interval : ' + config.updateIntervalMs + 'ms (1.0s Low-Overhead Mode)',
     'echo.',
-    'echo Launching FramePulseHUD.exe now (Approve UAC prompt for ETW DXGI access)...',
-    'start "" "%~dp0FramePulseHUD.exe"',
+    'echo Launching SageFPSOverlay.exe now...',
+    'start "" "%~dp0SageFPSOverlay.exe"',
     'timeout /t 3 >nul',
     'exit /b 0',
   ];

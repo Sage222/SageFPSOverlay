@@ -393,9 +393,19 @@ export const ConfigurationDock: React.FC<ConfigurationDockProps> = ({
                 desc: 'Sampled via Windows GPU Engine performance counter',
               },
               {
+                key: 'showVramLoad' as const,
+                label: 'GPU Dedicated VRAM Utilization (%)',
+                desc: 'Dedicated GPU Adapter Memory usage vs. 64-bit DXGI VRAM capacity',
+              },
+              {
                 key: 'showCpuLoad' as const,
                 label: 'CPU Total Processor Load (%)',
                 desc: 'Sampled via Windows Processor(_Total) counter',
+              },
+              {
+                key: 'showRamLoad' as const,
+                label: 'System Memory (RAM) Utilization (%)',
+                desc: 'Physical RAM usage percentage via Win32 GlobalMemoryStatusEx',
               },
             ].map((item) => {
               const checked = config[item.key];
@@ -428,26 +438,27 @@ export const ConfigurationDock: React.FC<ConfigurationDockProps> = ({
 
         <hr className="border-slate-800/80" />
 
-        {/* 4. Low-Overhead Resource Governance */}
+        {/* 4. Low-Overhead Resource & Portable .INI Governance */}
         <section className="space-y-2.5">
           <label className="text-xs font-semibold text-slate-200 flex items-center gap-2">
             <Clock className="w-3.5 h-3.5 text-emerald-400" />
-            <span>System Resource & Window Governance</span>
+            <span>Portable Config &amp; Resource Governance</span>
           </label>
 
           <div className="p-3 rounded-lg bg-[#0B0F17] border border-slate-800/90 space-y-2.5">
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-300 font-medium">
-                Telemetry Polling Cadence
+                Portable Config File
               </span>
-              <span className="font-mono text-emerald-400 font-semibold tabular-nums">
-                1,000 ms (1.0s Fixed)
+              <span className="font-mono text-emerald-400 font-semibold">
+                SageFPSOverlay.ini
               </span>
             </div>
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              Locked to a 1-second hardware counter tick in C# (
-              <code className="text-slate-300">Timer.Interval = 1000</code>) to
-              keep CPU overhead under 0.05% and prevent frame pacing stutter.
+              Stored in the exact same directory next to{' '}
+              <code className="text-slate-300">SageFPSOverlay.exe</code>. All
+              system tray changes auto-save to this portable file and reload on
+              startup.
             </p>
 
             <div className="pt-1 flex items-center justify-between gap-2 border-t border-slate-800/80">
